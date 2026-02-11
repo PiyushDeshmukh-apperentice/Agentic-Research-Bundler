@@ -1,0 +1,5 @@
+credentials/
+agentic/
+__pycache__/
+.env
+outputs/

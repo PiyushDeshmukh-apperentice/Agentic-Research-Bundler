@@ -1,0 +1,10 @@
+langchain
+langchain-groq
+langchain-core
+langchain-community
+python-dotenv
+requests
+pydantic
+arxiv
+kaggle
+streamlit
