@@ -1,115 +1,279 @@
+import os
+os.environ["KAGGLE_CONFIG_DIR"] = os.path.join(os.getcwd(), "credentials")
+
 import subprocess
 import json
-import os
+import csv
+import io
+import requests
 from dotenv import load_dotenv
 
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
+from kaggle.api.kaggle_api_extended import KaggleApi
 
+# ---------------------------
 # Load env
+# ---------------------------
 load_dotenv()
 
-# Initialize LLM
+GROQ_API_KEY = os.getenv("GROQ_API")
+
+# ---------------------------
+# Initialize LLM (FILTER ONLY)
+# ---------------------------
 llm = ChatGroq(
-    model="llama-3.1-8b-instant",
+    model="llama-3.3-70b-versatile",
     temperature=0.1,
-    api_key=os.getenv("GROQ_API")
+    api_key=GROQ_API_KEY
 )
 
 # ---------------------------
-# Step 1: Query Kaggle API
+# Step 1A: Kaggle Search
 # ---------------------------
-import csv
-import subprocess
-import io
-
 def search_kaggle_datasets(query: str, max_results: int = 5):
-    command = [
-        "kaggle", "datasets", "list",
-        "--search", query,
-        "--csv"
-    ]
+    try:
+        api = KaggleApi()
+        api.authenticate()
 
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        check=True
+        results = api.dataset_list(search=query)
+
+        datasets = []
+        for ds in results[:max_results]:
+            datasets.append({
+                "name": ds.title,
+                "source": "kaggle",
+                "url": f"https://www.kaggle.com/datasets/{ds.ref}",
+                "description": ds.subtitle or "",
+                "size": getattr(ds, "size", "unknown"),
+                "last_updated": str(getattr(ds, "lastUpdated", "unknown")),
+                "votes": getattr(ds, "voteCount", 0)
+            })
+
+        return datasets
+
+    except Exception as e:
+        print("[KAGGLE API ERROR]:", e)
+        return []
+
+
+# ---------------------------
+# Step 1B: HuggingFace Datasets
+# ---------------------------
+def search_hf_datasets(query: str, max_results: int = 5):
+    url = f"https://huggingface.co/api/datasets?search={query}"
+
+    try:
+        response = requests.get(url)
+        data = response.json()
+
+        datasets = []
+        for item in data[:max_results]:
+            datasets.append({
+                "name": item.get("id"),
+                "source": "huggingface",
+                "url": f"https://huggingface.co/datasets/{item.get('id')}",
+                "description": item.get("description", "")[:200]
+            })
+
+        return datasets
+
+    except Exception as e:
+        print("[HF ERROR]:", e)
+        return []
+
+
+# ---------------------------
+# Step 1C: GitHub Dataset Search
+# ---------------------------
+def search_github_datasets(query: str, max_results: int = 5):
+    url = f"https://api.github.com/search/repositories?q={query}+dataset"
+
+    try:
+        response = requests.get(url)
+        data = response.json()
+
+        datasets = []
+        for repo in data.get("items", [])[:max_results]:
+            datasets.append({
+                "name": repo.get("name"),
+                "source": "github",
+                "url": repo.get("html_url"),
+                "description": repo.get("description", "")
+            })
+
+        return datasets
+
+    except Exception as e:
+        print("[GitHub ERROR]:", e)
+        return []
+
+
+# ---------------------------
+# Step 2: Merge + Deduplicate
+# ---------------------------
+def merge_and_deduplicate(*sources):
+    combined = []
+    for src in sources:
+        combined.extend(src)
+
+    seen = set()
+    unique = []
+
+    for d in combined:
+        name = d.get("name", "").lower().strip()
+        if name and name not in seen:
+            unique.append(d)
+            seen.add(name)
+
+    return unique
+
+
+# ---------------------------
+# Step 3: Ranking
+# ---------------------------
+def rank_datasets(datasets):
+    return sorted(
+        datasets,
+        key=lambda x: len(x.get("description", "")),
+        reverse=True
     )
 
-    datasets = []
-    csv_reader = csv.DictReader(io.StringIO(result.stdout))
-
-    for row in csv_reader:
-        if len(datasets) >= max_results:
-            break
-
-        dataset_ref = row["ref"]
-
-        datasets.append({
-            "name": row["title"],
-            "ref": dataset_ref,
-            "url": f"https://www.kaggle.com/datasets/{dataset_ref}"
-        })
-
-    return datasets
-
 
 # ---------------------------
-# Step 2: Dataset summarization prompt
+# Step 4: LLM FILTER (🔥 KEY)
 # ---------------------------
-dataset_prompt = ChatPromptTemplate.from_messages([
-    ("system", """
-You are a Dataset Discovery Agent.
+parser = JsonOutputParser()
+format_instructions = parser.get_format_instructions()
 
-You are given REAL datasets retrieved from Kaggle.
-Your job is to analyze their suitability.
+filter_prompt = ChatPromptTemplate.from_messages([
+    ("system", f"""
+You are a dataset filtering agent.
 
-Rules:
-- ONLY use provided dataset info
-- Do NOT invent datasets
-- Do NOT suggest models
-- Output ONLY valid JSON
+Return ONLY valid JSON.
 
-JSON Schema:
+STRICT FORMAT:
 {{
   "datasets": [
     {{
       "name": "",
-      "source": "Kaggle",
-      "task_type": "",
-      "data_type": "",
-      "labels": "",
-      "url": ""
+      "source": "",
+      "url": "",
+      "description": ""
     }}
-  ],
-  "coverage_notes": []
+  ]
 }}
+
+RULES:
+- DO NOT return a list directly
+- DO NOT return anything outside JSON
+- ONLY select from given datasets
+- DO NOT modify dataset fields
+
+{format_instructions}
 """),
     ("human", """
-Research Query:
+Query:
 {query}
 
-Retrieved Datasets:
+Datasets:
 {datasets}
 """)
 ])
 
-parser = JsonOutputParser()
-dataset_chain = dataset_prompt | llm | parser
+filter_chain = filter_prompt | llm | parser
+
+
+def filter_datasets(query, datasets):
+    if not datasets:
+        return []
+
+    try:
+        response = filter_chain.invoke({
+            "query": query,
+            "datasets": json.dumps(datasets, indent=2)
+        })
+
+        # ✅ HANDLE MULTIPLE RESPONSE TYPES
+        if isinstance(response, list):
+            filtered = response
+
+        elif isinstance(response, dict):
+            filtered = response.get("datasets", [])
+
+        else:
+            print("⚠️ Unexpected LLM response type")
+            return datasets[:3]
+
+        # ✅ VALIDATE against original datasets
+        original_names = set(d["name"] for d in datasets)
+
+        filtered = [
+            d for d in filtered
+            if isinstance(d, dict) and d.get("name") in original_names
+        ]
+
+        if not filtered:
+            print("⚠️ LLM returned empty → fallback")
+            return datasets[:3]
+
+        return filtered
+
+    except Exception as e:
+        print("[FILTER ERROR]:", e)
+        return datasets
 
 
 # ---------------------------
-# Step 3: Run Dataset Agent
+# Step 5: Limit
+# ---------------------------
+def limit_datasets(datasets, max_total=6):
+    return datasets[:max_total]
+
+
+# ---------------------------
+# Step 6: Run Dataset Agent
 # ---------------------------
 def run_dataset_agent(query: str) -> dict:
-    kaggle_datasets = search_kaggle_datasets(query)
+    print("📊 Searching Kaggle...")
+    kaggle_data = search_kaggle_datasets(query, 6)
 
-    output = dataset_chain.invoke({
+    print("📊 Searching HuggingFace...")
+    hf_data = search_hf_datasets(query, 6)
+
+    print("📊 Searching GitHub...")
+    github_data = search_github_datasets(query, 6)
+
+    all_datasets = merge_and_deduplicate(
+        kaggle_data,
+        hf_data,
+        github_data
+    )
+
+    if not all_datasets:
+        return {"datasets": []}
+
+    # Step 1: Rank
+    all_datasets = rank_datasets(all_datasets)
+
+    # Step 2: Reduce input to LLM
+    all_datasets = all_datasets[:10]
+
+    # Step 3: LLM Filter 🔥
+    print("🧠 Filtering datasets...")
+    filtered = filter_datasets(query, all_datasets)
+
+    # Step 4: Final limit
+    final_datasets = limit_datasets(filtered, 6)
+
+    output = {
         "query": query,
-        "datasets": json.dumps(kaggle_datasets, indent=2)
-    })
+        "total_datasets": len(final_datasets),
+        "datasets": final_datasets
+    }
+
+    os.makedirs("outputs", exist_ok=True)
 
     with open("outputs/dataset_agent_output.json", "w") as f:
         json.dump(output, f, indent=4)
@@ -121,6 +285,6 @@ def run_dataset_agent(query: str) -> dict:
 # Entry Point
 # ---------------------------
 if __name__ == "__main__":
-    query = "Deep learning landslide detection using satellite imagery"
+    query = "Plant Image Disease Prediction"
     result = run_dataset_agent(query)
     print(json.dumps(result, indent=4))

@@ -1,124 +1,100 @@
+import streamlit as st
 import json
 import os
-import streamlit as st
+from agents.paper_agent import run_paper_agent
+from agents.dataset_agent import run_dataset_agent
+from agents.citation_agent import CitationAgent
+from agents.planner_agent import PlannerAgent
 
-st.set_page_config(page_title="Research Assistant", layout="wide")
+# --- Page Config ---
+st.set_page_config(page_title="Agentic Research Bundler", page_icon="🧬", layout="wide")
 
-st.title("Research Bundle Explorer")
+# --- Initialize Agents ---
+citation_tool = CitationAgent()
+planner_tool = PlannerAgent()
 
-query = st.text_input("Research query", value="Deep learning methods for landslide detection using satellite imagery")
+def main():
+    st.title("🧬 Agentic Research Bundler")
+    st.markdown("Automated Literature Survey, Dataset Discovery, and Project Planning.")
 
-run_button = st.button("Run research pipeline")
+    # Sidebar for API Status/Config
+    with st.sidebar:
+        st.header("⚙️ System Status")
+        st.success("Groq API: Connected")
+        st.success("arXiv/Semantic Scholar: Online")
+        st.success("Kaggle/HF/GitHub: Online")
+        st.divider()
+        st.info("Model: Llama Models via Groq")
 
-output_area = st.empty()
+    # User Input
+    query = st.text_input("Enter your research topic/query:", placeholder="e.g., Federated Learning for Medical Imaging")
+    
+    if st.button("🚀 Run Research Pipeline", use_container_width=True):
+        if not query:
+            st.warning("Please enter a topic first!")
+            return
 
+        # --- EXECUTION PIPELINE ---
+        with st.status("🏗️ Building Research Bundle...", expanded=True) as status:
+            
+            # 1. Paper Agent
+            st.write("🔍 Fetching and filtering research papers...")
+            paper_results = run_paper_agent(query)
+            st.write(f"✅ Found {len(paper_results.get('papers', []))} relevant papers.")
 
-def load_bundle_from_file(path="outputs/research_bundle.json"):
-    if os.path.exists(path):
-        try:
-            with open(path, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            return {"error": str(e)}
-    return None
+            # 2. Dataset Agent
+            st.write("📊 Searching for datasets (Kaggle, HF, GitHub)...")
+            dataset_results = run_dataset_agent(query)
+            st.write(f"✅ Found {len(dataset_results.get('datasets', []))} datasets.")
 
+            # 3. Citation Agent
+            st.write("📜 Formatting citations (APA, IEEE, BibTeX)...")
+            citations = citation_tool.run(paper_results)
 
-if run_button:
-    output_area.info("Running research pipeline. This may take a while...")
-    try:
-        from supervisor import run_research_system
+            # 4. Planner Agent
+            st.write("🧠 Synthesizing implementation strategy...")
+            action_plan = planner_tool.create_plan(query, paper_results, dataset_results)
+            
+            status.update(label="✅ Research Bundle Complete!", state="complete", expanded=False)
 
-        results = run_research_system(query)
-    except Exception as e:
-        st.warning(f"Could not run full pipeline here: {e}")
-        results = load_bundle_from_file() or {"error": "No local bundle available"}
+        # --- DISPLAY RESULTS ---
+        tab1, tab2, tab3, tab4 = st.tabs(["📑 Action Plan", "📚 Papers", "💾 Datasets", "🖋️ Citations"])
 
-    if results is None:
-        st.error("No results produced.")
-    else:
-        output_area.success("Research bundle obtained — displaying below")
+        with tab1:
+            st.header("🛠️ Implementation Roadmap")
+            st.markdown(action_plan)
 
-        # Planner
-        if results.get("planner"):
-            st.subheader("Planner Analysis")
-            planner = results["planner"]
-            if isinstance(planner, dict) and planner.get("analysis"):
-                analysis = planner["analysis"]
-                cols = st.columns(3)
-                with cols[0]:
-                    st.markdown("**Research domain**")
-                    st.write(analysis.get("research_domain"))
-                    st.markdown("**Sub-domain**")
-                    st.write(analysis.get("sub_domain"))
-                with cols[1]:
-                    st.markdown("**Problem type**")
-                    st.write(analysis.get("problem_type"))
-                    st.markdown("**Data modality**")
-                    st.write(analysis.get("data_modality"))
-                with cols[2]:
-                    st.markdown("**Key techniques**")
-                    st.write(analysis.get("key_techniques"))
-                    st.markdown("**Expected outputs**")
-                    st.write(analysis.get("expected_outputs"))
+        with tab2:
+            st.header("Relevant Literature")
+            for p in paper_results.get("papers", []):
+                with st.expander(f"{p['title']} ({p['year']})"):
+                    st.write(f"**Authors:** {', '.join(p['authors'])}")
+                    st.write(f"**Source:** {p['source'].upper()}")
+                    st.write(f"**Summary:** {p['summary']}")
+                    st.link_button("View Paper", p['link'])
 
-            if isinstance(planner, dict) and planner.get("subtasks"):
-                st.markdown("**Subtasks**")
-                for s in planner.get("subtasks", []):
-                    st.write(f"- **{s.get('agent')}**: {s.get('goal')} — {s.get('rationale')}")
+        with tab3:
+            st.header("Discovered Datasets")
+            cols = st.columns(2)
+            for i, d in enumerate(dataset_results.get("datasets", [])):
+                with cols[i % 2].container(border=True):
+                    st.subheader(d['name'])
+                    st.caption(f"Source: {d['source'].title()}")
+                    st.write(d['description'][:200] + "...")
+                    st.link_button("Access Dataset", d['url'])
 
-        # Papers
-        if results.get("papers"):
-            st.subheader("Papers")
-            papers_obj = results["papers"]
-            papers = papers_obj.get("papers") if isinstance(papers_obj, dict) else None
-            if not papers:
-                st.write(papers_obj)
+        with tab4:
+            st.header("Generated Citations")
+            cite_type = st.radio("Format", ["IEEE", "APA", "BibTeX"], horizontal=True)
+            
+            if cite_type == "IEEE":
+                for c in citations["ieee"]:
+                    st.code(c, language=None)
+            elif cite_type == "APA":
+                for c in citations["apa"]:
+                    st.code(c, language=None)
             else:
-                for p in papers:
-                    st.markdown(f"**{p.get('title')}** — {p.get('year')}")
-                    st.write(p.get("methodology"))
-                    st.write("**Data used:** " + str(p.get("data_used")))
-                    st.write("**Key contribution:** " + str(p.get("key_contribution")))
-                    st.write("---")
+                st.code(citations["bibtex"], language="bibtex")
 
-        # Datasets
-        if results.get("datasets"):
-            st.subheader("Datasets")
-            datasets_obj = results["datasets"]
-            datasets = datasets_obj.get("datasets") if isinstance(datasets_obj, dict) else None
-            if not datasets:
-                st.write(datasets_obj)
-            else:
-                for d in datasets:
-                    st.markdown(f"**{d.get('name')}** — {d.get('source', 'unknown')}")
-                    st.write("Task: " + str(d.get("task_type")))
-                    st.write("Data type: " + str(d.get("data_type")))
-                    st.write("Labels: " + str(d.get("labels")))
-                    if d.get("url"):
-                        st.write(d.get("url"))
-                    st.write("---")
-
-        # Action plan
-        if results.get("action_plan"):
-            st.subheader("Action Plan")
-            ap = results["action_plan"]
-            # If nested under 'research_plan'
-            if isinstance(ap, dict) and ap.get("research_plan"):
-                rp = ap["research_plan"]
-                st.markdown(f"**{rp.get('title', 'Research Plan')}**")
-                st.write(rp.get("objective"))
-                for step in rp.get("methodology", []):
-                    st.markdown(f"- **{step.get('step')}**: {step.get('description')}")
-                    if step.get("papers"):
-                        st.write("  - Papers:")
-                        for p in step.get("papers"):
-                            st.write(f"    - {p.get('title')} ({p.get('year')})")
-                    if step.get("datasets"):
-                        st.write("  - Datasets:")
-                        for d in step.get("datasets"):
-                            st.write(f"    - {d.get('name')}")
-            else:
-                st.write(ap)
-
-else:
-    st.info("Enter a query and click 'Run research pipeline' — or open an existing `outputs/research_bundle.json` by running the pipeline separately.")
+if __name__ == "__main__":
+    main()

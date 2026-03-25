@@ -1,138 +1,86 @@
-# Research Bundle — Agentic AI
+# 🧬 Agentic Research Bundler
 
-A small multi-agent research assistant that plans a research workflow, retrieves papers and datasets, and generates an action plan. This repository runs a planner, paper discovery, dataset discovery, and action-plan agent and aggregates results into `outputs/research_bundle.json`.
+An automated, multi-agent research assistant that orchestrates specialized agents to perform literature surveys, discover datasets, generate citations, and draft technical implementation plans.
 
-## Contents
+## 🧠 How It Works
 
-- `supervisor.py` — Orchestrates agents and writes `outputs/research_bundle.json`.
-- `agents/` — Agent implementations:
-  - `planner_agent.py` — Produces a structured plan (analysis + subtasks).
-  - `paper_agent.py` — Fetches papers (arXiv) and summarizes them.
-  - `dataset_agent.py` — Searches Kaggle and summarizes datasets.
-  - `actionPlan_agent.py` — Produces a neutral step-by-step research plan.
-- `app.py` — Streamlit UI to run or view the research bundle.
-- `requirements.txt` — Python dependencies (update as needed).
-- `outputs/` — Generated outputs; main artifact is `outputs/research_bundle.json`.
+The system utilizes a **Modular Orchestrator** pattern where a central Streamlit application coordinates four specialized agents.
 
-## Quick summary of outputs
+1.  **Paper Agent**: Queries **arXiv** and **Semantic Scholar**. It merges results, ranks them by citations/recency, and uses **Llama 3.3-70b** to filter for semantic relevance.
+2.  **Dataset Agent**: Scours **Kaggle**, **HuggingFace**, and **GitHub** for relevant data sources, applying LLM-based filtering to ensure the datasets match the research goal.
+3.  **Citation Agent**: A hybrid agent that uses deterministic logic for **APA/IEEE** formatting and an LLM for valid **BibTeX** generation.
+4.  **Planner Agent**: The system "Brain" that synthesizes the papers and datasets into a **4-week implementation roadmap**.
 
-- `outputs/research_bundle.json` — Final combined bundle containing:
-  - `query` — input query string
-  - `planner` — planner analysis and subtasks
-  - `papers` — paper summaries (prefer `paper_agent_output.json` if available)
-  - `datasets` — dataset summaries (prefer `dataset_agent_output.json` if available)
-  - `action_plan` — final action plan (prefer `outputs/action_plan_agent_output.json` if available)
+---
 
-Agent-specific files that may appear at repository root or `outputs/`:
-- `paper_agent_output.json`
-- `dataset_agent_output.json`
-- `outputs/action_plan_agent_output.json`
-- `planner_agent_output.json`
+## 🛠️ Tech Stack
 
-## Setup
+* **Language**: Python 3.9+
+* **LLM Inference**: Groq (Llama-3.3-70b-versatile)
+* **Framework**: LangChain
+* **UI**: Streamlit
+* **APIs**: arXiv, Semantic Scholar, Kaggle, HuggingFace, GitHub
 
-Prerequisites:
-- Python 3.10+ (project uses 3.12 in a virtualenv here; any 3.10+ should work)
-- Git (optional)
-- `kaggle` CLI configured if you want dataset discovery to work locally
+---
 
-Steps:
+## 🚀 Setup Instructions
 
-1. Create a virtual environment and activate it:
-
+### 1. Clone & Install
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-2. Install dependencies:
-
-```bash
+git clone <your-repo-url>
+cd research-bundler
 pip install -r requirements.txt
 ```
 
-3. Environment variables and credentials:
+### 2. Configure Environment Variables
+Create a `.env` file in the root directory. This file stores your sensitive API keys.
 
-- GROQ_API: required by the LLM wrapper `langchain_groq` used in agents. Export it if you have access:
-
-```bash
-export GROQ_API="your_groq_api_key"
+```text
+# .env
+GROQ_API="your_groq_api_key_here"
 ```
 
-- Kaggle credentials: place your Kaggle API JSON at `~/.kaggle/kaggle.json` (permission 600). The repository includes a `credentials/kaggle.json` sample — either copy it to `~/.kaggle/` or set `KAGGLE_CONFIG_DIR`:
+### 3. Setup Kaggle Credentials
+Kaggle requires a physical `kaggle.json` file.
+1.  Go to [Kaggle.com](https://www.kaggle.com) -> Settings -> **Create New Legacy API Token**.
+2.  Create a folder named `credentials` in your project root.
+3.  Move your downloaded `kaggle.json` into the `credentials` folder.
 
-```bash
-mkdir -p ~/.kaggle
-cp credentials/kaggle.json ~/.kaggle/kaggle.json
-chmod 600 ~/.kaggle/kaggle.json
+---
+
+## 🔑 Obtaining Credentials
+
+| Tool | How to get API Key | Where to store |
+| :--- | :--- | :--- |
+| **Groq** | Sign up at [Groq Cloud](https://console.groq.com/) and create an API Key. | `.env` file |
+| **Kaggle** | Settings > API > Create New Token. | `credentials/kaggle.json` |
+| **arXiv** | Public API (No key required). | N/A |
+| **Semantic Scholar** | Public API (No key required for basic tier). | N/A |
+| **HuggingFace** | Settings > Access Tokens (Optional for search). | `.env` (if used) |
+| **GitHub** | Settings > Developer Settings > Personal Access Tokens. | `.env` (Optional) |
+
+---
+
+## 📂 Project Structure
+
+```text
+.
+├── app.py                # Main Streamlit UI & Orchestrator
+├── paper_agent.py        # arXiv & Semantic Scholar logic
+├── dataset_agent.py      # Kaggle, HF, & GitHub logic
+├── citation_agent.py     # APA, IEEE, & BibTeX logic
+├── planner_agent.py      # Implementation Roadmap logic
+├── .env                  # API Keys (Git ignored)
+├── credentials/          
+│   └── kaggle.json       # Kaggle API credentials
+└── outputs/              # Stores generated JSON & MD files
 ```
 
-If you prefer, set `KAGGLE_CONFIG_DIR` to point to `credentials/`:
+---
 
-```bash
-export KAGGLE_CONFIG_DIR=$(pwd)/credentials
-```
+## 🛡️ Resilience & Rate Limiting
 
-4. (Optional) If you do not have `langchain_groq` or an API key, the Streamlit UI can still load and display an existing `outputs/research_bundle.json` created elsewhere.
-
-## Running the pipeline
-
-From the repository root:
-
-```bash
-python3 supervisor.py
-```
-
-This will:
-- Run the planner agent to generate `planner_agent_output.json`.
-- Conditionally run the paper and dataset agents according to planner subtasks.
-- Conditionally run the action plan agent if papers and datasets are available.
-- Write the combined `outputs/research_bundle.json`.
-
-Note: If `langchain_groq` or other LLM dependencies are missing, the run will error early. In that case you can still view or edit `outputs/research_bundle.json` manually.
-
-## Streamlit UI
-
-Start the UI with:
-
-```bash
-streamlit run app.py
-```
-
-The app allows you to:
-- Enter a research query and attempt to run the pipeline from the UI (requires the same environment and credentials as above).
-- If running the pipeline from the UI fails, it will fall back to loading `outputs/research_bundle.json` and display the planner analysis, paper summaries, datasets, and action plan.
-
-## File locations and expectations
-
-- `outputs/research_bundle.json` — the canonical combined output. If you want to reuse the outputs between runs, commit or archive this file.
-- Agent outputs may be saved at root (e.g., `paper_agent_output.json`, `dataset_agent_output.json`) or under `outputs/` (e.g., `outputs/action_plan_agent_output.json`). `supervisor.py` prefers agent output files when building the bundle.
-
-## Troubleshooting
-
-- Missing packages: install via `pip install -r requirements.txt`. If a specific module still errors (e.g., `langchain_groq`), check that the package name and versions in `requirements.txt` match pip package names on PyPI.
-- LLM/API errors: ensure `GROQ_API` (or other keys) are set and valid.
-- Kaggle errors: ensure the Kaggle CLI is installed and `kaggle.json` is accessible (`~/.kaggle/kaggle.json`), or set `KAGGLE_CONFIG_DIR` to the local `credentials/` folder.
-- Permission errors writing to `outputs/`: ensure you have write permission in the repo directory.
-
-## Development notes
-
-- Planner output format: `planner_agent.py` produces a Pydantic `PlannerOutput` with `analysis` and `subtasks`. `supervisor.py` now derives `agents_invoked` from `planner['subtasks']`.
-- If you want agents to always write their outputs to `outputs/`, modify the `with open(...)` paths inside each agent (e.g., change `paper_agent_output.json` to `outputs/paper_agent_output.json`).
-- The Streamlit UI (`app.py`) is intentionally simple. You can extend it to show PDFs, download links, or to run longer jobs asynchronously.
-
-## Example workflow
-
-1. Ensure credentials and `GROQ_API` are set.
-2. Run `python3 supervisor.py`.
-3. Inspect `outputs/research_bundle.json`.
-4. Optionally run `streamlit run app.py` to view results in a web UI.
-
-## Contributing
-
-- Fork and open a PR.
-- Keep changes minimal and focused to the requested feature or fix.
-
-## License
-
-Add a license if you plan to publish this project.
+The system is designed with **Fail-Safe Orchestration**:
+* **Backoff Strategy**: Includes delays between API calls to avoid `HTTP 429` rate limits.
+* **Source Fallback**: If arXiv is rate-limited, the system automatically proceeds with Semantic Scholar data.
+* **Session Persistence**: Streamlit `session_state` is used to prevent the pipeline from re-running when toggling UI elements.

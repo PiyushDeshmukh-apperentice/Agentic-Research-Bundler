@@ -1,141 +1,92 @@
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import PydanticOutputParser
-from dotenv import load_dotenv
-from pydantic import BaseModel, Field
-from typing import List
 import os
 import json
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
-# --------------------------------------------------
-# Load environment variables
-# --------------------------------------------------
 load_dotenv()
 
-# --------------------------------------------------
-# Pydantic Schemas (FORCED THINKING)
-# --------------------------------------------------
+class PlannerAgent:
+    def __init__(self):
+        self.llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0.3, # Slightly higher for creative planning
+            api_key=os.getenv("GROQ_API")
+        )
+        self.parser = StrOutputParser()
 
-class Analysis(BaseModel):
-    research_domain: str = Field(
-        ..., description="High-level research domain (e.g., Remote Sensing, NLP)"
-    )
-    sub_domain: str = Field(
-        ..., description="Specific research sub-domain"
-    )
-    problem_type: str = Field(
-        ..., description="Core ML task type (classification, detection, segmentation, etc.)"
-    )
-    data_modality: List[str] = Field(
-        ..., description="Types of data involved"
-    )
-    key_techniques: List[str] = Field(
-        ..., description="Relevant ML/DL techniques or architectures"
-    )
-    expected_outputs: List[str] = Field(
-        ..., description="Expected outputs of the system or model"
-    )
+    def create_plan(self, query, papers, datasets):
+        """
+        Input: 
+            query: Original research topic
+            papers: List from paper_agent
+            datasets: List from dataset_agent
+        """
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """
+You are an expert AI Research Lead and Project Architect. 
+Your task is to create a 4-week implementation roadmap based ONLY on the provided research papers and datasets.
 
+STRUCTURE YOUR RESPONSE IN MARKDOWN:
+1. Executive Summary: The core objective.
+2. Literature-Based Architecture: Suggest a model architecture citing the specific papers provided.
+3. Data Strategy: Explain how to use the provided datasets for training/validation.
+4. 4-Week Sprint Plan:
+   - Week 1: Setup & Preprocessing
+   - Week 2: Model Development
+   - Week 3: Training & Fine-tuning
+   - Week 4: Evaluation & Deployment
+5. Potential Pitfalls: Technical challenges specific to this project.
 
-class SubTask(BaseModel):
-    agent: str = Field(..., description="Agent to be invoked")
-    goal: str = Field(..., description="Goal of the agent")
-    rationale: str = Field(..., description="Why this agent is needed")
-    inputs: List[str] = Field(
-        ..., description="Inputs or constraints for the agent"
-    )
-
-
-class PlannerOutput(BaseModel):
-    analysis: Analysis
-    subtasks: List[SubTask]
-
-
-# --------------------------------------------------
-# Initialize Output Parser
-# --------------------------------------------------
-
-parser = PydanticOutputParser(pydantic_object=PlannerOutput)
-
-# --------------------------------------------------
-# Initialize Groq LLM (Planner = Strong Model)
-# --------------------------------------------------
-
-llm = ChatGroq(
-    model="llama-3.1-8b-instant",
-    temperature=0.1,
-    api_key=os.getenv("GROQ_API")
-)
-
-# --------------------------------------------------
-# Planner Prompt (ANALYTICAL)
-# --------------------------------------------------
-
-planner_prompt = ChatPromptTemplate.from_messages([
-    ("system", """
-You are a Research Planning Agent in a multi-agent AI system.
-
-Your task is to ANALYZE the research query and produce a structured execution plan.
-
-You must:
-- Infer research domain and sub-domain
-- Identify the core ML problem type
-- Identify data modality
-- Extract key technical concepts
-- Justify why each agent must be invoked
-
-Rules:
-- Do NOT answer the research question
-- Do NOT generate papers or datasets
-- Output ONLY valid JSON
-- Follow the schema exactly
-
-Available agents:
-1. paper_agent
-2. dataset_agent
-4. action_plan_agent
-
-{format_instructions}
+STRICT RULES:
+- If a paper mentions a specific model (e.g., YOLOv8, Transformer), use that in the plan.
+- If a dataset is from Kaggle, mention the specific Kaggle URL provided.
+- Do NOT suggest tools or data that are not in the context.
 """),
-    ("human", "{query}")
-]).partial(
-    format_instructions=parser.get_format_instructions()
-)
+            ("human", """
+Research Topic: {query}
 
-# --------------------------------------------------
-# Build Planner Chain
-# --------------------------------------------------
+---
+RELEVANT PAPERS:
+{paper_context}
 
-planner_chain = planner_prompt | llm | parser
+---
+RELEVANT DATASETS:
+{dataset_context}
+""")
+        ])
 
+        # Prepare context strings
+        paper_context = "\n".join([f"- {p['title']} ({p['year']}): {p['summary']}" for p in papers.get("papers", [])])
+        dataset_context = "\n".join([f"- {d['name']} ({d['source']}): {d['description']}" for d in datasets.get("datasets", [])])
 
-# --------------------------------------------------
-# Utility: Save output to JSON
-# --------------------------------------------------
+        chain = prompt | self.llm | self.parser
 
-def save_output_to_json(data: dict, filename: str = "outputs/planner_agent_output.json") -> None:
-    with open(filename, "w") as f:
-        json.dump(data, f, indent=4)
+        try:
+            print("🧠 Synthesizing research into an action plan...")
+            plan = chain.invoke({
+                "query": query,
+                "paper_context": paper_context,
+                "dataset_context": dataset_context
+            })
+            
+            # Save output
+            os.makedirs("outputs", exist_ok=True)
+            with open("outputs/planner_agent_output.md", "w") as f:
+                f.write(plan)
+                
+            return plan
 
-
-# --------------------------------------------------
-# Run Planner Agent
-# --------------------------------------------------
-
-def run_planner(query: str) -> dict:
-    """
-    Runs the planner agent on a research query and saves output
-    """
-    output = planner_chain.invoke({"query": query})
-    save_output_to_json(output.dict())
-    return output.dict()
-
-
-# --------------------------------------------------
-# Main
-# --------------------------------------------------
+        except Exception as e:
+            return f"Error generating plan: {str(e)}"
 
 if __name__ == "__main__":
-    query = "Deep Learning methods to classify AI generated music and human generated music"
-    plan = run_planner(query)
-    print(json.dumps(plan, indent=4))
+    # Test logic
+    agent = PlannerAgent()
+    # Dummy data for testing
+    p_data = {"papers": [{"title": "Attention is All you Need", "year": 2017, "summary": "Intro to Transformers"}]}
+    d_data = {"datasets": [{"name": "IMDB Dataset", "source": "Kaggle", "description": "Movie reviews for sentiment"}]}
+    
+    print(agent.create_plan("NLP Sentiment Transformer", p_data, d_data))
