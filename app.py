@@ -85,16 +85,16 @@ def main():
 
         with tab4:
             st.header("Generated Citations")
-            cite_type = st.radio("Format", ["IEEE", "APA", "BibTeX"], horizontal=True)
+            cite_type = st.radio("Format", ["IEEE"], horizontal=True)
             
             if cite_type == "IEEE":
                 for c in citations["ieee"]:
                     st.code(c, language=None)
-            elif cite_type == "APA":
-                for c in citations["apa"]:
-                    st.code(c, language=None)
-            else:
-                st.code(citations["bibtex"], language="bibtex")
+            # elif cite_type == "APA":
+            #     for c in citations["apa"]:
+            #         st.code(c, language=None)
+            # else:
+            #     st.code(citations["bibtex"], language="bibtex")
 
 if __name__ == "__main__":
     main()

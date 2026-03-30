@@ -28,7 +28,7 @@ llm = ChatGroq(
 # ---------------------------
 # Step 1A: Fetch papers from arXiv
 # ---------------------------
-def fetch_arxiv_papers(query: str, max_results: int = 20): # Increased harvest
+def fetch_arxiv_papers(query: str, max_results: int = 5): # Increased harvest
     client = arxiv.Client(
         page_size=max_results,
         delay_seconds=3,
@@ -65,7 +65,7 @@ def fetch_arxiv_papers(query: str, max_results: int = 20): # Increased harvest
 # ---------------------------
 # Step 1B: Fetch papers from Semantic Scholar
 # ---------------------------
-def fetch_semantic_scholar_papers(query: str, max_results: int = 20): # Increased harvest
+def fetch_semantic_scholar_papers(query: str, max_results: int = 5): # Increased harvest
     params = {
         "query": query,
         "limit": max_results,
@@ -160,7 +160,7 @@ def filter_relevant_papers(query, papers):
         elif isinstance(response, dict):
             filtered = response.get("papers", [])
         else:
-            return papers[:15] # Fallback if response is weird
+            return papers[:5] # Fallback if response is weird
 
         # Ensure returned papers are actually from our original list
         original_titles = {p["title"].lower().strip() for p in papers}
@@ -170,7 +170,7 @@ def filter_relevant_papers(query, papers):
         ]
 
         if not validated_filtered:
-            return papers[:15] # Fallback to top 15 if LLM fails
+            return papers[:5] # Fallback to top 15 if LLM fails
 
         return validated_filtered
 
@@ -185,7 +185,7 @@ def filter_relevant_papers(query, papers):
 def run_paper_agent(query: str) -> dict:
     # --- 1. Fetch from arXiv ---
     print("🔍 Fetching papers from arXiv...")
-    arxiv_papers = fetch_arxiv_papers(query, max_results=20)
+    arxiv_papers = fetch_arxiv_papers(query, max_results=5)
     
     # If arXiv hit a rate limit, arxiv_papers will be [] because of your try-except
     if not arxiv_papers:
@@ -215,12 +215,12 @@ def run_paper_agent(query: str) -> dict:
     all_papers = rank_papers(all_papers)
     
     # Feed the top available results to the LLM
-    all_papers_chunk = all_papers[:25]
+    all_papers_chunk = all_papers[:5]
 
     print(f"🧠 Filtering {len(all_papers_chunk)} papers using LLM...")
     filtered_papers = filter_relevant_papers(query, all_papers_chunk)
 
-    final_papers = filtered_papers[:20]
+    final_papers = filtered_papers[:5]
 
     output = {
         "query": query,
