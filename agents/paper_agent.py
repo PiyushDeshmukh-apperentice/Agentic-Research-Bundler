@@ -2,6 +2,7 @@ import arxiv
 import json
 import os
 import requests
+import time
 from dotenv import load_dotenv
 
 from langchain_groq import ChatGroq
@@ -31,8 +32,8 @@ llm = ChatGroq(
 def fetch_arxiv_papers(query: str, max_results: int = 5): # Increased harvest
     client = arxiv.Client(
         page_size=max_results,
-        delay_seconds=3,
-        num_retries=3
+        delay_seconds=10,
+        num_retries=5
     )
 
     clean_query = query.strip().replace(":", "").replace('"', '')
@@ -50,13 +51,17 @@ def fetch_arxiv_papers(query: str, max_results: int = 5): # Increased harvest
             papers.append({
                 "title": result.title,
                 "year": result.published.year,
-                "summary": result.summary[:500],
+                "summary": result.summary[:250],
                 "authors": [a.name for a in result.authors],
                 "source": "arxiv",
                 "link": result.pdf_url
             })
+            time.sleep(0.5)
     except Exception as e:
-        print(f"⚠️ arXiv API Error: {e}")
+        if "429" in str(e):
+            print("⚠️ arXiv Rate Limit hit. Waiting for cooldown...")
+        else:
+            print(f"⚠️ arXiv API Error: {e}")
         return []
 
     return papers
@@ -74,6 +79,11 @@ def fetch_semantic_scholar_papers(query: str, max_results: int = 5): # Increased
 
     try:
         response = requests.get(SEMANTIC_SCHOLAR_API, params=params)
+
+        if response.status_code == 429:
+            print("⚠️ Semantic Scholar Rate Limit hit.")
+            return []
+
         data = response.json()
 
         papers = []
@@ -81,7 +91,7 @@ def fetch_semantic_scholar_papers(query: str, max_results: int = 5): # Increased
             papers.append({
                 "title": paper.get("title"),
                 "year": paper.get("year"),
-                "summary": (paper.get("abstract") or "")[:500],
+                "summary": (paper.get("abstract") or "")[:250],
                 "authors": [a.get("name") for a in paper.get("authors", [])],
                 "source": "semantic_scholar",
                 "link": paper.get("url"),
@@ -176,7 +186,7 @@ def filter_relevant_papers(query, papers):
 
     except Exception as e:
         print(f"LLM Filter Error: {e}")
-        return papers[:15] # High volume fallback
+        return papers[:5] # High volume fallback
 
 
 # ---------------------------
@@ -197,7 +207,7 @@ def run_paper_agent(query: str) -> dict:
 
     # --- 2. Fetch from Semantic Scholar ---
     print("🔍 Fetching papers from Semantic Scholar...")
-    semantic_papers = fetch_semantic_scholar_papers(query, max_results=20)
+    semantic_papers = fetch_semantic_scholar_papers(query, max_results=5)
     
     if not semantic_papers:
         print("⚠️ Semantic Scholar unavailable. Continuing with remaining sources...")
