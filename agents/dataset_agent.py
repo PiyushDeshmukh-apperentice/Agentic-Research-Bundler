@@ -136,7 +136,7 @@ def merge_and_deduplicate(*sources):
 def rank_datasets(datasets):
     return sorted(
         datasets,
-        key=lambda x: len(x.get("description", "")),
+        key=lambda x: len(x.get("description") or ""),
         reverse=True
     )
 

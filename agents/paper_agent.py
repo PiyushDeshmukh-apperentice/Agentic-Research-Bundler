@@ -102,6 +102,42 @@ def fetch_semantic_scholar_papers(query: str, max_results: int = 5): # Increased
         print("Semantic Scholar Error:", e)
         return []
 
+# ---------------------------
+# Step 1C: Generative Fallback (LLM)
+# ---------------------------
+def generate_fallback_papers(query: str):
+    """
+    Called only if arXiv and Semantic Scholar are both rate-limited.
+    Uses LLM to suggest well-known papers/methods based on internal knowledge.
+    """
+    fallback_prompt = ChatPromptTemplate.from_messages([
+        ("system", """
+You are a research assistant. The live search APIs are currently unavailable.
+Based on your internal knowledge, suggest 5 seminal or highly relevant papers for the given topic.
+Return ONLY valid JSON.
+"""),
+        ("human", f"Topic: {query}\n\n{format_instructions}")
+    ])
+    
+    chain = fallback_prompt | llm | parser
+    
+    try:
+        print("🤖 APIs limited. Generating seminal papers from LLM memory...")
+        response = chain.invoke({})
+        
+        # Handle list vs dict response as we do in the filter
+        papers = response if isinstance(response, list) else response.get("papers", [])
+        
+        # Add a flag so the UI knows these are generated suggestions
+        for p in papers:
+            p["source"] = "llm_fallback"
+            p["link"] = "https://scholar.google.com/scholar?q=" + p.get("title", "").replace(" ", "+")
+            p["year"] = p.get("year", "N/A")
+            
+        return papers
+    except Exception as e:
+        print(f"❌ Fallback generation failed: {e}")
+        return []
 
 # ---------------------------
 # Step 2: Merge + Deduplicate
@@ -192,50 +228,108 @@ def filter_relevant_papers(query, papers):
 # ---------------------------
 # Step 6: Run Paper Agent
 # ---------------------------
+# def run_paper_agent(query: str) -> dict:
+#     # --- 1. Fetch from arXiv ---
+#     print("🔍 Fetching papers from arXiv...")
+#     arxiv_papers = fetch_arxiv_papers(query, max_results=5)
+    
+#     # If arXiv hit a rate limit, arxiv_papers will be [] because of your try-except
+#     if not arxiv_papers:
+#         print("⚠️ arXiv unavailable (Rate Limit/Error). Continuing with remaining sources...")
+    
+#     # Optional: Small sleep to prevent simultaneous "bursting" across APIs
+#     import time
+#     time.sleep(1) 
+
+#     # --- 2. Fetch from Semantic Scholar ---
+#     print("🔍 Fetching papers from Semantic Scholar...")
+#     semantic_papers = fetch_semantic_scholar_papers(query, max_results=5)
+    
+#     if not semantic_papers:
+#         print("⚠️ Semantic Scholar unavailable. Continuing with remaining sources...")
+
+#     # --- 3. Merge results ---
+#     # merge_and_deduplicate will handle cases where one list is empty
+#     all_papers = merge_and_deduplicate(arxiv_papers, semantic_papers)
+
+#     # Only exit if BOTH failed
+#     if not all_papers:
+#         print("❌ Both sources failed to return results.")
+#         return {"papers": []}
+
+#     # --- 4. Rank and Filter ---
+#     all_papers = rank_papers(all_papers)
+    
+#     # Feed the top available results to the LLM
+#     all_papers_chunk = all_papers[:5]
+
+#     print(f"🧠 Filtering {len(all_papers_chunk)} papers using LLM...")
+#     filtered_papers = filter_relevant_papers(query, all_papers_chunk)
+
+#     final_papers = filtered_papers[:5]
+
+#     output = {
+#         "query": query,
+#         "total_papers": len(final_papers),
+#         "papers": final_papers
+#     }
+
+#     os.makedirs("outputs", exist_ok=True)
+#     with open("outputs/paper_agent_output.json", "w") as f:
+#         json.dump(output, f, indent=4)
+
+#     return output
+
 def run_paper_agent(query: str) -> dict:
     # --- 1. Fetch from arXiv ---
     print("🔍 Fetching papers from arXiv...")
     arxiv_papers = fetch_arxiv_papers(query, max_results=5)
     
-    # If arXiv hit a rate limit, arxiv_papers will be [] because of your try-except
     if not arxiv_papers:
-        print("⚠️ arXiv unavailable (Rate Limit/Error). Continuing with remaining sources...")
+        print("⚠️ arXiv unavailable (Rate Limit/Error).")
     
-    # Optional: Small sleep to prevent simultaneous "bursting" across APIs
     import time
-    time.sleep(1) 
+    time.sleep(2) # Increased to be more polite to APIs
 
     # --- 2. Fetch from Semantic Scholar ---
     print("🔍 Fetching papers from Semantic Scholar...")
     semantic_papers = fetch_semantic_scholar_papers(query, max_results=5)
     
     if not semantic_papers:
-        print("⚠️ Semantic Scholar unavailable. Continuing with remaining sources...")
+        print("⚠️ Semantic Scholar unavailable.")
 
     # --- 3. Merge results ---
-    # merge_and_deduplicate will handle cases where one list is empty
     all_papers = merge_and_deduplicate(arxiv_papers, semantic_papers)
 
-    # Only exit if BOTH failed
+    # --- 🌟 NEW: GENERATIVE FALLBACK TRIGGER ---
+    is_fallback = False
     if not all_papers:
-        print("❌ Both sources failed to return results.")
-        return {"papers": []}
+        print("⚠️ Both APIs failed. Activating Generative Fallback...")
+        all_papers = generate_fallback_papers(query)
+        is_fallback = True
+        
+        if not all_papers:
+            print("❌ Both sources and fallback failed.")
+            return {"papers": [], "status": "error"}
+        
+        # If we are in fallback, the LLM just "thought" of these, 
+        # so we skip the filtering step later.
+        final_papers = all_papers[:5]
+    else:
+        # --- 4. Standard Flow: Rank and Filter ---
+        all_papers = rank_papers(all_papers)
+        
+        # Feed available results to the LLM for filtering
+        all_papers_chunk = all_papers[:10] 
+        print(f"🧠 Filtering {len(all_papers_chunk)} papers using LLM...")
+        final_papers = filter_relevant_papers(query, all_papers_chunk)
 
-    # --- 4. Rank and Filter ---
-    all_papers = rank_papers(all_papers)
-    
-    # Feed the top available results to the LLM
-    all_papers_chunk = all_papers[:5]
-
-    print(f"🧠 Filtering {len(all_papers_chunk)} papers using LLM...")
-    filtered_papers = filter_relevant_papers(query, all_papers_chunk)
-
-    final_papers = filtered_papers[:5]
-
+    # --- 5. Prepare Output ---
     output = {
         "query": query,
         "total_papers": len(final_papers),
-        "papers": final_papers
+        "papers": final_papers[:5],
+        "is_fallback": is_fallback  # Flag for the UI
     }
 
     os.makedirs("outputs", exist_ok=True)
@@ -243,6 +337,28 @@ def run_paper_agent(query: str) -> dict:
         json.dump(output, f, indent=4)
 
     return output
+
+# --- Helper Function for Fallback ---
+def generate_fallback_papers(query: str):
+    """Generates seminal papers from LLM memory when APIs are down."""
+    fallback_prompt = ChatPromptTemplate.from_messages([
+        ("system", "The research APIs are down. Based on your knowledge, suggest 5 seminal or highly relevant papers for the query. Return ONLY valid JSON with a 'papers' key."),
+        ("human", f"Query: {query}\n\n{format_instructions}")
+    ])
+    
+    chain = fallback_prompt | llm | parser
+    try:
+        response = chain.invoke({})
+        papers = response if isinstance(response, list) else response.get("papers", [])
+        
+        for p in papers:
+            p["source"] = "llm_knowledge"
+            # Generate a helpful link since we don't have the real PDF URL
+            p["link"] = f"https://scholar.google.com/scholar?q={p.get('title','').replace(' ', '+')}"
+        return papers
+    except Exception as e:
+        print(f"Fallback Error: {e}")
+        return []
 
 
 if __name__ == "__main__":
